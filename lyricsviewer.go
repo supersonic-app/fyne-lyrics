@@ -61,7 +61,7 @@ type LyricsViewer struct {
 
 	prototypeLyricLineSize fyne.Size
 
-	scroll *NoScroll
+	scroll *container.Scroll
 	vbox   *fyne.Container
 
 	// nil when an animation is not currently running
@@ -85,11 +85,11 @@ func (l *LyricsViewer) SetLyrics(lines []string, synced bool) {
 	l.synced = synced
 	l.currentLine = 0
 	if l.scroll != nil {
-		direction := container.ScrollVerticalOnly
 		if synced {
-			direction = container.ScrollNone
+			l.scroll.Direction = container.ScrollNone
+		} else {
+			l.scroll.Direction = container.ScrollVerticalOnly
 		}
-		l.scroll.Direction = direction
 	}
 	l.updateContent()
 }
@@ -372,36 +372,14 @@ func (l *LyricsViewer) checkStopAnimation() bool {
 
 func (l *LyricsViewer) CreateRenderer() fyne.WidgetRenderer {
 	l.vbox = container.NewVBox()
-	l.scroll = NewNoScroll(l.vbox)
-	if !l.synced {
+	l.scroll = container.NewScroll(l.vbox)
+	if l.synced {
+		l.scroll.Direction = container.ScrollNone
+	} else {
 		l.scroll.Direction = container.ScrollVerticalOnly
 	}
 	l.updateContent()
 	return widget.NewSimpleRenderer(l.scroll)
-}
-
-// overridden container.Scroll to not respond to mouse wheel/trackpad
-// after Fyne 2.5, this will no longer be needed as the base container.Scroll
-// will not respond to mouse wheel/trackpad when Direction is ScrollNone
-type NoScroll struct {
-	container.Scroll
-}
-
-func NewNoScroll(content fyne.CanvasObject) *NoScroll {
-	n := &NoScroll{
-		Scroll: container.Scroll{
-			Content:   content,
-			Direction: container.ScrollNone,
-		},
-	}
-	n.ExtendBaseWidget(n)
-	return n
-}
-
-func (n *NoScroll) Scrolled(e *fyne.ScrollEvent) {
-	if n.Direction != container.ScrollNone {
-		n.Scroll.Scrolled(e)
-	}
 }
 
 type vSpace struct {
