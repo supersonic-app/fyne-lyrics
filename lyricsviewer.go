@@ -20,6 +20,8 @@ const (
 	// ActiveLyricPositionUpperMiddle positions the active lyric line
 	// in the upper-middle of the widget, roughly 1/3 of the way down
 	ActiveLyricPositionUpperMiddle
+
+	ActiveLyricPositionTop
 )
 
 // LyricsViewer is a widget for displaying song lyrics.
@@ -51,6 +53,9 @@ type LyricsViewer struct {
 	// in synced mode.
 	ActiveLyricPosition ActiveLyricPosition
 
+	// LyricSizeName sets the size of each line. It is SubHeading by default
+	LyricSizeName fyne.ThemeSizeName
+
 	lines  []string
 	synced bool
 
@@ -71,7 +76,9 @@ type LyricsViewer struct {
 
 // NewLyricsViewer returns a new lyrics viewer.
 func NewLyricsViewer() *LyricsViewer {
-	s := &LyricsViewer{}
+	s := &LyricsViewer{
+		LyricSizeName: theme.SizeNameSubHeadingText,
+	}
 	s.ExtendBaseWidget(s)
 	s.prototypeLyricLineSize = s.newLyricLine("Hello...", false).MinSize()
 	return s
@@ -99,7 +106,7 @@ func (l *LyricsViewer) SetLyrics(lines []string, synced bool) {
 // before the first line. In unsynced mode this is a no-op. This function is
 // typically called when the user has seeked the playing song to a new position.
 func (l *LyricsViewer) SetCurrentLine(line int) {
-	if line < 0 || line > len(l.lines) {
+	if line < 0 || (line-1) > len(l.lines) {
 		panic("SetCurrentLine: line number out of range")
 	}
 	if l.vbox == nil || !l.synced {
@@ -197,9 +204,14 @@ func (l *LyricsViewer) updateSpacerSize(size fyne.Size) {
 		return // renderer not created yet
 	}
 
-	ht := size.Height / 2
-	if l.ActiveLyricPosition == ActiveLyricPositionUpperMiddle {
+	var ht float32
+	switch l.ActiveLyricPosition {
+	case ActiveLyricPositionUpperMiddle:
 		ht = size.Height / 3
+	case ActiveLyricPositionMiddle:
+		ht = size.Height / 2
+	case ActiveLyricPositionTop:
+		ht = l.newLyricLine("W", true).MinSize().Height
 	}
 
 	var topSpaceHeight, bottomSpaceHeight float32
@@ -309,8 +321,13 @@ func (l *LyricsViewer) offsetForLine(lineNum int /*one-indexed*/) float32 {
 
 func (l *LyricsViewer) newLyricLine(text string, useActiveColor bool) *widget.RichText {
 	ts := &widget.TextSegment{
-		Text:  text,
-		Style: widget.RichTextStyleSubHeading,
+		Text: text,
+		Style: widget.RichTextStyle{
+			SizeName: l.LyricSizeName,
+			TextStyle: fyne.TextStyle{
+				Bold: true,
+			},
+		},
 	}
 	ts.Style.SizeName = l.textSizeName()
 	if useActiveColor {
