@@ -1,4 +1,4 @@
-module github.com/dweymouth/fyne-lyrics
+module github.com/supersonic-app/fyne-lyrics
 
 go 1.19
 

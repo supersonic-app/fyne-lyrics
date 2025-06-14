@@ -1,11 +1,12 @@
 package main
 
 import (
+	"log"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	fynelyrics "github.com/dweymouth/fyne-lyrics"
+	fynelyrics "github.com/supersonic-app/fyne-lyrics"
 )
 
 var lyrics = []string{
@@ -35,6 +36,9 @@ func main() {
 	l := fynelyrics.NewLyricsViewer()
 	l.ActiveLyricPosition = fynelyrics.ActiveLyricPositionUpperMiddle
 	l.SetLyrics(lyrics, true /*synced*/)
+	l.OnLyricTapped = func(lineNum int) {
+		log.Printf("Tapped lyric line %d", lineNum)
+	}
 
 	win.SetContent(l)
 	win.Resize(fyne.NewSize(200, 300))
