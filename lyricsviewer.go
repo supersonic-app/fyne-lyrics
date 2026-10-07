@@ -1,6 +1,7 @@
 package fynelyrics
 
 import (
+	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -11,6 +12,25 @@ import (
 )
 
 type ActiveLyricPosition int
+
+type noScrollBarTheme struct {
+	fyne.Theme
+}
+
+func (n *noScrollBarTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameScrollBar || name == theme.SizeNameScrollBarSmall {
+		return 0
+	}
+	return n.Theme.Size(name)
+}
+
+func (n *noScrollBarTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNameScrollBar {
+		return color.Transparent
+	}
+
+	return n.Theme.Color(name, variant)
+}
 
 const (
 	// ActiveLyricPositionMiddle positions the active lyric line in the middle of the widget
@@ -405,7 +425,13 @@ func (l *LyricsViewer) CreateRenderer() fyne.WidgetRenderer {
 		l.manualScroll = true
 	}
 	l.updateContent()
-	return widget.NewSimpleRenderer(l.scroll)
+
+	noScrollBar := container.NewThemeOverride(
+		l.scroll,
+		&noScrollBarTheme{theme.Current()},
+	)
+
+	return widget.NewSimpleRenderer(noScrollBar)
 }
 
 type vSpace struct {
