@@ -1,6 +1,7 @@
 package fynelyrics
 
 import (
+	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -11,6 +12,25 @@ import (
 )
 
 type ActiveLyricPosition int
+
+type noScrollBarTheme struct {
+	fyne.Theme
+}
+
+func (n *noScrollBarTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameScrollBar || name == theme.SizeNameScrollBarSmall {
+		return 0
+	}
+	return n.Theme.Size(name)
+}
+
+func (n *noScrollBarTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNameScrollBar {
+		return color.Transparent
+	}
+
+	return n.Theme.Color(name, variant)
+}
 
 const (
 	// ActiveLyricPositionMiddle positions the active lyric line in the middle of the widget
@@ -69,6 +89,13 @@ type LyricsViewer struct {
 	// that will be scrolled when the animation is finished
 	currentLine int
 
+	// Duration between the last user scroll and the auto-scrolling taking back control
+	scrollTimeoutDuration time.Duration
+	// Last time the user scrolled manually
+	lastScroll time.Time
+	// Whether the current engaged system is manual scrolling or not
+	manualScroll bool
+
 	prototypeLyricLineSize fyne.Size
 
 	scroll *container.Scroll
@@ -84,6 +111,7 @@ func NewLyricsViewer() *LyricsViewer {
 	s := &LyricsViewer{}
 	s.ExtendBaseWidget(s)
 	s.prototypeLyricLineSize = s.newLyricLine("Hello...", 0, false).MinSize()
+	s.scrollTimeoutDuration = 1 * time.Second
 	return s
 }
 
@@ -92,13 +120,7 @@ func (l *LyricsViewer) SetLyrics(lines []string, synced bool) {
 	l.lines = lines
 	l.synced = synced
 	l.currentLine = 0
-	if l.scroll != nil {
-		if synced {
-			l.scroll.Direction = container.ScrollNone
-		} else {
-			l.scroll.Direction = container.ScrollVerticalOnly
-		}
-	}
+	l.manualScroll = false // ensure the auto scroll engages immediately
 	l.updateContent()
 }
 
@@ -107,61 +129,23 @@ func (l *LyricsViewer) SetLyrics(lines []string, synced bool) {
 // before the first line. In unsynced mode this is a no-op. This function is
 // typically called when the user has seeked the playing song to a new position.
 func (l *LyricsViewer) SetCurrentLine(line int) {
-	if line < 0 || line > len(l.lines) {
-		panic("SetCurrentLine: line number out of range")
-	}
-	if l.vbox == nil || !l.synced {
-		l.currentLine = line
-		return // renderer not created yet or unsynced mode
-	}
-	inactiveColor := l.inactiveLyricColor()
-	if l.checkStopAnimation() && l.currentLine > 1 {
-		// we were in the middle of animation
-		// make sure prev line is right color
-		l.setLineColor(l.vbox.Objects[l.currentLine-1].(*lyricLine), inactiveColor, true)
-	}
-	if l.currentLine != 0 {
-		l.setLineColor(l.vbox.Objects[l.currentLine].(*lyricLine), inactiveColor, true)
-	}
-	l.currentLine = line
-	if l.currentLine != 0 {
-		l.setLineColor(l.vbox.Objects[l.currentLine].(*lyricLine), l.activeLyricColor(), true)
-	}
-	l.scroll.Offset.Y = l.offsetForLine(l.currentLine)
-	l.scroll.Refresh()
+	l.scrollToLine(line, true)
+	l.manualScroll = false
 }
 
 // NextLine advances the lyric viewer to the next line with an animated scroll.
 // In unsynced mode this is a no-op.
 func (l *LyricsViewer) NextLine() {
-	if l.vbox == nil || !l.synced {
-		return // no renderer yet, or unsynced lyrics (no-op)
-	}
-
-	if l.currentLine == len(l.lines) {
-		return // already at last line
-	}
-	if l.checkStopAnimation() {
-		// we were in the middle of animation - short-circuit it to completed
-		// make sure prev and current lines are right color and scrolled to the end
-		if l.currentLine > 1 {
-			l.setLineColor(l.vbox.Objects[l.currentLine-1].(*lyricLine), l.inactiveLyricColor(), true)
+	scroll := true
+	if l.manualScroll {
+		if time.Since(l.lastScroll) > l.scrollTimeoutDuration {
+			l.manualScroll = false
+		} else {
+			scroll = false
 		}
-		l.setLineColor(l.vbox.Objects[l.currentLine].(*lyricLine), l.activeLyricColor(), true)
-		l.scroll.Offset.Y = l.offsetForLine(l.currentLine)
-	}
-	l.currentLine++
-
-	var prevLine, nextLine *lyricLine
-	if l.currentLine > 1 {
-		prevLine = l.vbox.Objects[l.currentLine-1].(*lyricLine)
-	}
-	if l.currentLine <= len(l.lines) {
-		nextLine = l.vbox.Objects[l.currentLine].(*lyricLine)
 	}
 
-	l.setupScrollAnimation(prevLine, nextLine)
-	l.anim.Start()
+	l.scrollToLine(l.currentLine+1, scroll)
 }
 
 func (l *LyricsViewer) Refresh() {
@@ -217,7 +201,7 @@ func (l *LyricsViewer) updateContent() {
 	if l.vbox == nil {
 		return // renderer not created yet
 	}
-	l.checkStopAnimation()
+	l.stopAnimation()
 
 	lnObj := len(l.vbox.Objects)
 	if lnObj == 0 {
@@ -255,31 +239,47 @@ func (l *LyricsViewer) updateContent() {
 	l.scroll.Refresh()
 }
 
-func (l *LyricsViewer) setupScrollAnimation(currentLine, nextLine *lyricLine) {
-	// calculate total scroll distance for the animation
-	scrollDist := theme.Padding()
-	if currentLine != nil {
-		scrollDist += currentLine.Size().Height / 2
-	} else {
-		scrollDist += l.prototypeLyricLineSize.Height / 2
+func (l *LyricsViewer) scrollToLine(targetLine int, scroll bool) {
+	if l.vbox == nil || !l.synced {
+		return // no renderer yet, or unsynced mode
 	}
-	if nextLine != nil {
-		scrollDist += nextLine.Size().Height / 2
-	} else {
-		scrollDist += l.prototypeLyricLineSize.Height / 2
+
+	if targetLine < 0 || targetLine > len(l.lines) {
+		return
+	}
+
+	if targetLine == l.currentLine {
+		return
+	}
+
+	l.stopAnimation()
+
+	var currentLyricLine, targetLyricLine *lyricLine
+	if l.currentLine > 0 {
+		currentLyricLine = l.vbox.Objects[l.currentLine].(*lyricLine)
+	}
+	if targetLine > 0 {
+		targetLyricLine = l.vbox.Objects[targetLine].(*lyricLine)
 	}
 
 	l.animStartOffset = l.scroll.Offset.Y
+	scrollDist := l.offsetForLine(targetLine) - l.animStartOffset
+
+	l.currentLine = targetLine
+
 	var alreadyUpdated bool
-	l.anim = fyne.NewAnimation(140*time.Millisecond, func(f float32) {
-		l.scroll.Offset.Y = l.animStartOffset + f*scrollDist
-		l.scroll.Refresh()
-		if !alreadyUpdated && f >= 0.5 {
-			if nextLine != nil {
-				l.setLineColor(nextLine, l.activeLyricColor(), true)
+	l.anim = fyne.NewAnimation(300*time.Millisecond, func(f float32) {
+		if scroll {
+			l.scroll.Offset.Y = l.animStartOffset + f*scrollDist
+			l.scroll.Refresh()
+		}
+		if !alreadyUpdated {
+			// inactivate first so that if they are the same line, we don't inactivate it
+			if currentLyricLine != nil {
+				l.setLineColor(currentLyricLine, l.inactiveLyricColor(), true)
 			}
-			if currentLine != nil {
-				l.setLineColor(currentLine, l.inactiveLyricColor(), true)
+			if targetLyricLine != nil {
+				l.setLineColor(targetLyricLine, l.activeLyricColor(), true)
 			}
 			alreadyUpdated = true
 		}
@@ -287,7 +287,8 @@ func (l *LyricsViewer) setupScrollAnimation(currentLine, nextLine *lyricLine) {
 			l.anim = nil
 		}
 	})
-	l.anim.Curve = fyne.AnimationEaseInOut
+	l.anim.Curve = fyne.AnimationEaseOut
+	l.anim.Start()
 }
 
 func (l *LyricsViewer) offsetForLine(lineNum int /*one-indexed*/) float32 {
@@ -369,25 +370,30 @@ func (l *LyricsViewer) textSizeName() fyne.ThemeSizeName {
 	return theme.SizeNameSubHeadingText
 }
 
-func (l *LyricsViewer) checkStopAnimation() bool {
+func (l *LyricsViewer) stopAnimation() {
 	if l.anim != nil {
 		l.anim.Stop()
-		l.anim = nil
-		return true
+		if l.anim.Tick != nil {
+			l.anim.Tick(1.0)
+		}
 	}
-	return false
 }
 
 func (l *LyricsViewer) CreateRenderer() fyne.WidgetRenderer {
 	l.vbox = container.NewVBox()
-	l.scroll = container.NewScroll(l.vbox)
-	if l.synced {
-		l.scroll.Direction = container.ScrollNone
-	} else {
-		l.scroll.Direction = container.ScrollVerticalOnly
+	l.scroll = container.NewVScroll(l.vbox)
+	l.scroll.OnScrolled = func(p fyne.Position) {
+		l.lastScroll = time.Now()
+		l.manualScroll = true
 	}
 	l.updateContent()
-	return widget.NewSimpleRenderer(l.scroll)
+
+	noScrollBar := container.NewThemeOverride(
+		l.scroll,
+		&noScrollBarTheme{theme.Current()},
+	)
+
+	return widget.NewSimpleRenderer(noScrollBar)
 }
 
 type vSpace struct {
